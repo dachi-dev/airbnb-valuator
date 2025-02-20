@@ -4,7 +4,7 @@ import os
 import re
 import time
 import random
-import psycopg2
+import sqlite3  # Using sqlite3 for dummy/in-memory connection
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
@@ -13,16 +13,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # Configuration
-NUM_PAGES_TO_SCRAPE = 15  # Number of pages per ZIP code
+NUM_PAGES_TO_SCRAPE = 1  # Number of pages per ZIP code
 DELAY_BETWEEN_REQUESTS = 3  # Time delay to avoid detection
 CITY_ZIP_FILE = "cities_and_zipcodes.json"  # File containing city names & ZIP codes
-
-# Supabase/PostgreSQL connection parameters
-DB_HOST = os.environ.get("SUPABASE_DB_HOST", "your-supabase-host.supabase.co")
-DB_PORT = os.environ.get("SUPABASE_DB_PORT", "5432")
-DB_NAME = os.environ.get("SUPABASE_DB_NAME", "postgres")
-DB_USER = os.environ.get("SUPABASE_DB_USER", "your-db-user")
-DB_PASSWORD = os.environ.get("SUPABASE_DB_PASSWORD", "your-db-password")
 
 def setup_driver(headless=True):
     """Setup Selenium WebDriver."""
@@ -74,50 +67,46 @@ def generate_random_search_params():
 # --- DATABASE FUNCTIONS ---
 
 def get_db_connection():
-    """Establish a connection to the Supabase PostgreSQL database."""
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD
-    )
+    """Establish a dummy (in-memory) SQLite connection."""
+    conn = sqlite3.connect(":memory:")
     return conn
 
 def create_table(conn):
     """Create the listings table if it doesn't exist."""
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS listings (
-                listing_id TEXT PRIMARY KEY,
-                city TEXT NOT NULL,
-                zipcode TEXT NOT NULL,
-                listing_url TEXT NOT NULL,
-                room_type TEXT,
-                bedroom_count INTEGER,
-                bathroom_count INTEGER
-            );
-        """)
-        conn.commit()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS listings (
+            listing_id TEXT PRIMARY KEY,
+            city TEXT NOT NULL,
+            zipcode TEXT NOT NULL,
+            listing_url TEXT NOT NULL,
+            room_type TEXT,
+            bedroom_count INTEGER,
+            bathroom_count INTEGER
+        );
+    """)
+    conn.commit()
+    cur.close()
 
 def insert_listing(conn, listing_data):
     """
     Insert a listing into the database.
     listing_data should be a dictionary containing:
     - listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count
+    Using SQLite's INSERT OR IGNORE to avoid duplicate entries.
     """
-    with conn.cursor() as cur:
-        try:
-            cur.execute("""
-                INSERT INTO listings (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count)
-                VALUES (%(listing_id)s, %(city)s, %(zipcode)s, %(listing_url)s, %(room_type)s, %(bedroom_count)s, %(bathroom_count)s)
-                ON CONFLICT (listing_id) DO NOTHING;
-            """, listing_data)
-            conn.commit()
-        except Exception as e:
-            print(f"Error inserting {listing_data.get('listing_url')}: {e}")
-            conn.rollback()
-
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT OR IGNORE INTO listings 
+            (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count)
+            VALUES (:listing_id, :city, :zipcode, :listing_url, :room_type, :bedroom_count, :bathroom_count);
+        """, listing_data)
+        conn.commit()
+    except Exception as e:
+        print(f"Error inserting {listing_data.get('listing_url')}: {e}")
+        conn.rollback()
+    cur.close()
 
 # --- PARSING FUNCTIONS ---
 
@@ -125,7 +114,6 @@ def parse_listing_details(url):
     """
     Visits the listing page and extracts relevant data:
     - listing_id: Extracted from the URL.
-    - title: The listing title.
     - summary: A breakdown of key details (e.g. guests, room type, bed, bath).
     - price: Price per night.
     
@@ -134,7 +122,6 @@ def parse_listing_details(url):
     """
     listing_data = {
         "listing_id": None,
-        "title": None,
         "room_type": None,
         "bed": None,
         "bath": None,
@@ -148,7 +135,6 @@ def parse_listing_details(url):
         match = re.search(r"/rooms/(\d+)", url)
         if match:
             listing_data["listing_id"] = match.group(1)
-
     
         # Extract the summary details (e.g., "3 guests · Studio · 1 bed · 1 bath")
         try:
@@ -156,15 +142,17 @@ def parse_listing_details(url):
                 EC.presence_of_element_located((By.XPATH, "//ol[contains(@class, 'lgx66tx')]"))
             )
             summary_text = summary_element.text.strip()
-            # Split the summary text by the dot separator
             parts = [part.strip() for part in summary_text.split("·")]
-            # Assign details based on position (adjust if Airbnb's layout changes)
-            # Expected order: guests, room type, bed info, bath info
-            if len(parts) >= 4:
-                # We focus on room type, bed and bath; guests can be extracted as needed.
-                listing_data["room_type"] = parts[1]  # e.g., "Studio"
-                listing_data["bed"] = parts[2]        # e.g., "1 bed"
-                listing_data["bath"] = parts[3]       # e.g., "1 bath"
+            if len(parts) == 4:
+                # Format: "X guests · RoomType · Y bed · Z bath"
+                listing_data["room_type"] = parts[1]   # e.g., "Studio" or "Entire home"
+                listing_data["bed"] = parts[2]         # e.g., "1 bed"
+                listing_data["bath"] = parts[3]        # e.g., "1 bath"
+            elif len(parts) == 3:
+                # Format: "X guests · Y bedrooms · Z baths"
+                listing_data["room_type"] = None       # No explicit room type provided
+                listing_data["bed"] = parts[1]         # e.g., "3 bedrooms"
+                listing_data["bath"] = parts[2]        # e.g., "1.5 baths"
             else:
                 print(f"Warning: Unexpected summary format in {url}: {summary_text}")
         except Exception as e:
@@ -173,12 +161,13 @@ def parse_listing_details(url):
     except Exception as e:
         print(f"Error parsing listing details from {url}: {e}")
     
+    print(f"Saving data for database insert: {listing_data}")
     return listing_data
 
 # --- SCRAPING FUNCTIONS ---
 
-def scrape_zipcode(city, zip_code, conn):
-    """Scrapes listings for a given city and ZIP code, parses details, and inserts them into the database."""
+def scrape_zipcode(city, zip_code):
+    """Scrapes listing URLs for a given city and ZIP code and returns a set of unique listing URLs."""
     check_in, check_out, guests, price_min, price_max = generate_random_search_params()
     start_page = random.randint(2, 5)
     listings = set()
@@ -193,19 +182,6 @@ def scrape_zipcode(city, zip_code, conn):
         waitForFullListingsLoad()
         new_listings = get_listings_from_page()
         listings.update(new_listings)
-        # For each new listing, visit the page to parse details and then insert into the database.
-        for listing_url in new_listings:
-            details = parse_listing_details(listing_url)
-            if details["listing_id"]:
-                listing_record = {
-                    "listing_id": details["listing_id"],
-                    "city": city,
-                    "zipcode": zip_code,
-                    "listing_url": listing_url,
-                    "title": details.get("title"),
-                    "price": details.get("price")
-                }
-                insert_listing(conn, listing_record)
         try:
             next_button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, "//a[@aria-label='Next']"))
@@ -221,13 +197,32 @@ def scrape_zipcode(city, zip_code, conn):
             break
 
     print(f"📊 Total unique listings found in {city} (ZIP {zip_code}): {len(listings)}")
+    print(f"Scraped for {zip_code} complete. Listings are \n {listings}")
     return listings
+
+def process_listings_for_zipcode(city, zip_code, listings, conn):
+    """Iterates through collected listing URLs to parse details and insert them into the database.
+       The zipcode is saved as part of each record."""
+    for listing_url in listings:
+        details = parse_listing_details(listing_url)
+        if details["listing_id"]:
+            listing_record = {
+                "listing_id": details["listing_id"],
+                "city": city,
+                "zipcode": zip_code,  # Saving the zipcode to the database
+                "listing_url": listing_url,
+                "room_type": details.get("room_type"),
+                "bedroom_count": None,  # Adjust if you extract these values
+                "bathroom_count": None  # Adjust if you extract these values
+            }
+            insert_listing(conn, listing_record)
 
 def process_city(city, zip_codes, conn):
     """Iterates through ZIP codes for a city and processes each listing."""
     for zip_code in zip_codes:
         print(f"\n🚀 Starting scrape for {city} (ZIP: {zip_code})")
-        scrape_zipcode(city, zip_code, conn)
+        listings = scrape_zipcode(city, zip_code)
+        process_listings_for_zipcode(city, zip_code, listings, conn)
 
 def load_data_from_file(file_path):
     """Reads city names and ZIP codes from a JSON file."""
@@ -241,24 +236,25 @@ def load_data_from_file(file_path):
 # --- MAIN EXECUTION ---
 
 if __name__ == "__main__":
-    print(parse_listing_details("https://www.airbnb.com/rooms/46637903?category_tag=Tag%3A5348&search_mode=flex_destinations_search&adults=1&check_in=2025-03-02&check_out=2025-03-07&children=0&infants=0&pets=0&photo_id=1123459137&source_impression_id=p3_1740089697_P3gFytq2tnFY8AiK&previous_page_section_name=1000&federated_search_id=98e024a7-0dad-48a6-b8b2-b9ee733272cc"))
-    # Connect to the database and create the table if needed.
-    # conn = get_db_connection()
-    # create_table(conn)
+    # Create an in-memory SQLite connection for testing
+    conn = sqlite3.connect(":memory:")
+    create_table(conn)
 
     # Load cities and ZIP codes from file.
-    # city_data = load_data_from_file(CITY_ZIP_FILE)
-    # if not city_data:
-    #     print("❌ No cities found in the file. Exiting.")
-    #     driver.quit()
-    #     conn.close()
-    #     exit()
+    city_data = load_data_from_file(CITY_ZIP_FILE)
+    if not city_data:
+        print("❌ No cities found in the file. Exiting.")
+        driver.quit()
+        conn.close()
+        exit()
 
-    # Process each city.
-    # for city, zip_codes in city_data.items():
-    #     print(f"\n🚀 Starting Airbnb Scraping for {city}")
-    #     process_city(city, zip_codes, conn)
+    for city, zip_codes in city_data.items():
+        print(f"\n🚀 Starting Airbnb Scraping for {city}")
+        for zip_code in zip_codes:
+            print(f"\n🚀 Processing {city} (ZIP: {zip_code})")
+            listings = scrape_zipcode(city, zip_code)
+            process_listings_for_zipcode(city, zip_code, listings, conn)
 
-    # driver.quit()
-    # conn.close()
-    # print("🏁 Scraping complete. All data pushed to the database.")
+    driver.quit()
+    conn.close()
+    print("🏁 Scraping complete. All data pushed to the database.")
