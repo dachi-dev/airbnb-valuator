@@ -70,9 +70,6 @@ def generate_random_search_params():
     price_max = random.choice([p for p in possible_price_max if p > price_min])
 
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), guests, price_min, price_max
-
-
-    return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), guests, price_min
 def capture_sample(city, num_pages=NUM_PAGES_TO_SCRAPE):
     """Scrapes multiple pages for a given city with randomized search parameters and detects duplicates."""
     check_in, check_out, guests, price_min, price_max = generate_random_search_params()
@@ -85,7 +82,7 @@ def capture_sample(city, num_pages=NUM_PAGES_TO_SCRAPE):
         search_url = (f"https://www.airbnb.com/s/{city}/homes?"
                       f"check_in={check_in}&check_out={check_out}&adults={guests}"
                       f"&price_min={price_min}&price_max={price_max}"
-                      f"&room_types[]=Entire%20home&page={page}")  # Added "Entire home" filter
+                      f"&room_types[]=Entire%20home%2Fapt&page={page}")  # Added "Entire home" filter
         print(f"\nScraping city: {city}, Page {page} -> {search_url}")
 
         driver.get(search_url)
