@@ -34,42 +34,6 @@ def waitForListingElement(timeout=10):
     WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/rooms/')]"))
     )
-def extract_listing_data(page_source):
-    """
-    Attempt to extract coordinates, bedrooms, and bathrooms from the listing page source.
-    This function assumes that the data is embedded in a JSON object within a script tag.
-    """
-    soup = BeautifulSoup(page_source, "html.parser")
-    script = soup.find("script", text=re.compile("window\\.__INITIAL_DATA__"))
-    if not script:
-        return None
-
-    json_text_match = re.search(r"window\.__INITIAL_DATA__\s*=\s*(\{.*\});", script.string)
-    if not json_text_match:
-        return None
-
-    try:
-        data = json.loads(json_text_match.group(1))
-    except json.JSONDecodeError:
-        return None
-
-    try:
-        # Navigate the JSON to find listing details. Adjust keys as necessary.
-        listing_info = data.get("bootstrapData", {})\
-                           .get("reduxData", {})\
-                           .get("homePDP", {})\
-                           .get("listing", {})
-        coordinates = (listing_info.get("lat"), listing_info.get("lng"))
-        bedrooms = listing_info.get("bedrooms")
-        bathrooms = listing_info.get("bathrooms")
-    except Exception:
-        return None
-
-    return {
-        "coordinates": coordinates,
-        "bedrooms": bedrooms,
-        "bathrooms": bathrooms
-    }
 
 def goToNextPage():
     current_url = driver.current_url
