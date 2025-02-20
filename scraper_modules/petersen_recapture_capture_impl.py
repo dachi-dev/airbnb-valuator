@@ -52,8 +52,6 @@ def get_listings_from_page():
             match = re.search(r"(https://www\.airbnb\.com/rooms/\d+)", url)
             if match:
                 listings.add(match.group(1))  # Add only the base URL
-
-    print(f"Extracted {len(listings)} unique listings from this page: {listings}")  # Debug output
     return listings
 
 
