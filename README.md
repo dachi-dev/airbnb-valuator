@@ -4,6 +4,7 @@ To run it, install the python dependencies and run `python scraper_modules/listi
 
 ### database
 This module is responsible for the postgresql database on supabase. Requires a .env with
+
 SUPABASE_DB_HOST=
 
 SUPABASE_DB_PORT=
