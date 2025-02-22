@@ -4,18 +4,27 @@ import os
 import re
 import time
 import random
-import sqlite3  # Using sqlite3 for dummy/in-memory connection
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import psycopg2
+from dotenv import load_dotenv
 
 # Configuration
+load_dotenv()
 NUM_PAGES_TO_SCRAPE = 1  # Number of pages per ZIP code
-DELAY_BETWEEN_REQUESTS = 3  # Time delay to avoid detection
+DELAY_BETWEEN_REQUESTS = 1  # Time delay to avoid detection
 CITY_ZIP_FILE = "cities_and_zipcodes.json"  # File containing city names & ZIP codes
+
+# Supabase/PostgreSQL connection parameters (set these via your environment or update defaults)
+DB_HOST = os.environ.get("SUPABASE_DB_HOST", "your-supabase-host.supabase.co")
+DB_PORT = os.environ.get("SUPABASE_DB_PORT", "5432")
+DB_NAME = os.environ.get("SUPABASE_DB_NAME", "postgres")
+DB_USER = os.environ.get("SUPABASE_DB_USER", "your-db-user")
+DB_PASSWORD = os.environ.get("SUPABASE_DB_PASSWORD", "your-db-password")
 
 def setup_driver(headless=True):
     """Setup Selenium WebDriver."""
@@ -28,22 +37,16 @@ def setup_driver(headless=True):
     return webdriver.Firefox(options=options)
 
 driver = setup_driver(headless=False)
-
 def waitForFullListingsLoad(max_wait=5):
-    """Waits until listings stop appearing dynamically, up to max_wait seconds."""
-    prev_count = 0
-    for _ in range(max_wait):
+    """Waits until there are more than 2 listings loaded, or until max_wait seconds have passed."""
+    elapsed = 0
+    while elapsed < max_wait:
         listing_elements = driver.find_elements(By.XPATH, "//a[contains(@href, '/rooms/')]")
-        current_count = len(listing_elements)
-        if current_count > prev_count:
-            prev_count = current_count
-            time.sleep(1)
-        else:
+        if len(listing_elements) > 2:
             break
-
+        elapsed += 1
 def get_listings_from_page():
     """Extracts unique listing URLs by removing extra query parameters."""
-    time.sleep(3)
     listing_elements = driver.find_elements(By.XPATH, "//a[contains(@href, '/rooms/')]")
     listings = set()
     for elem in listing_elements:
@@ -67,8 +70,16 @@ def generate_random_search_params():
 # --- DATABASE FUNCTIONS ---
 
 def get_db_connection():
-    """Establish a dummy (in-memory) SQLite connection."""
-    conn = sqlite3.connect(":memory:")
+    """Establish a connection to the Supabase PostgreSQL database."""
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        connect_timeout=5,
+        sslmode='require'
+    )
     return conn
 
 def create_table(conn):
@@ -93,14 +104,14 @@ def insert_listing(conn, listing_data):
     Insert a listing into the database.
     listing_data should be a dictionary containing:
     - listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count
-    Using SQLite's INSERT OR IGNORE to avoid duplicate entries.
+    Uses PostgreSQL's ON CONFLICT DO NOTHING to avoid duplicate entries.
     """
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT OR IGNORE INTO listings 
-            (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count)
-            VALUES (:listing_id, :city, :zipcode, :listing_url, :room_type, :bedroom_count, :bathroom_count);
+            INSERT INTO listings (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count)
+            VALUES (%(listing_id)s, %(city)s, %(zipcode)s, %(listing_url)s, %(room_type)s, %(bedroom_count)s, %(bathroom_count)s)
+            ON CONFLICT (listing_id) DO NOTHING;
         """, listing_data)
         conn.commit()
     except Exception as e:
@@ -113,56 +124,74 @@ def insert_listing(conn, listing_data):
 def parse_listing_details(url):
     """
     Visits the listing page and extracts relevant data:
-    - listing_id: Extracted from the URL.
-    - summary: A breakdown of key details (e.g. guests, room type, bed, bath).
-    - price: Price per night.
-    
-    Specifically, it extracts the room type (e.g. "Studio"), number of beds, and number of baths
-    from the summary information.
+      - listing_id: extracted from the URL.
+      - title: the listing title.
+      - room_type: e.g. "Studio" if indicated.
+      - bedroom_count: number of bedrooms.
+      - bathroom_count: number of bathrooms.
+      
+    It parses the summary section from the <ol> element with a class containing 'lgx66tx'.
+    Expected summary format example: "4 guests · 1 bedroom · 2 beds · 1.5 baths"
     """
     listing_data = {
         "listing_id": None,
+        "title": None,
         "room_type": None,
-        "bed": None,
-        "bath": None,
+        "bedroom_count": None,
+        "bathroom_count": None,
     }
     
     try:
-        driver.get(url)
-        time.sleep(5)  # Wait for the page to load completely
+        driver.get(url)  
+              
+        # Extract the listing ID from the URL.
+        m = re.search(r"/rooms/(\d+)", url)
+        if m:
+            listing_data["listing_id"] = m.group(1)
         
-        # Extract the listing ID from the URL
-        match = re.search(r"/rooms/(\d+)", url)
-        if match:
-            listing_data["listing_id"] = match.group(1)
-    
-        # Extract the summary details (e.g., "3 guests · Studio · 1 bed · 1 bath")
+        # Extract summary details from the ordered list.
         try:
             summary_element = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//ol[contains(@class, 'lgx66tx')]"))
             )
             summary_text = summary_element.text.strip()
             parts = [part.strip() for part in summary_text.split("·")]
-            if len(parts) == 4:
-                # Format: "X guests · RoomType · Y bed · Z bath"
-                listing_data["room_type"] = parts[1]   # e.g., "Studio" or "Entire home"
-                listing_data["bed"] = parts[2]         # e.g., "1 bed"
-                listing_data["bath"] = parts[3]        # e.g., "1 bath"
-            elif len(parts) == 3:
-                # Format: "X guests · Y bedrooms · Z baths"
-                listing_data["room_type"] = None       # No explicit room type provided
-                listing_data["bed"] = parts[1]         # e.g., "3 bedrooms"
-                listing_data["bath"] = parts[2]        # e.g., "1.5 baths"
-            else:
-                print(f"Warning: Unexpected summary format in {url}: {summary_text}")
+            # Example parts: ["4 guests", "1 bedroom", "2 beds", "1.5 baths"]
+            for part in parts:
+                part_lower = part.lower()
+                if "studio" in part_lower:
+                    listing_data["room_type"] = "Studio"
+                elif "bedroom" in part_lower:
+                    m_bedroom = re.search(r"(\d+)", part_lower)
+                    if m_bedroom:
+                        listing_data["bedroom_count"] = int(m_bedroom.group(1))
+                elif "beds" in part_lower and listing_data["bedroom_count"] is None:
+                    # Use "beds" as fallback if no "bedroom" info is present.
+                    m_beds = re.search(r"(\d+)", part_lower)
+                    if m_beds:
+                        listing_data["bedroom_count"] = int(m_beds.group(1))
+                elif "bath" in part_lower:
+                    m_bath = re.search(r"([\d\.]+)", part_lower)
+                    if m_bath:
+                        listing_data["bathroom_count"] = float(m_bath.group(1))
         except Exception as e:
             print(f"Warning: Could not extract summary details from {url}: {e}")
         
+        # # Extract the price per night.
+        # try:
+        #     price_element = WebDriverWait(driver, 10).until(
+        #         EC.presence_of_element_located((By.XPATH, "//*[contains(@aria-label, 'per night')]"))
+        #     )
+        #     listing_data["price"] = price_element.text.strip()
+        # except Exception as e:
+        #     print(f"Warning: Could not extract price from {url}: {e}")
+            
     except Exception as e:
         print(f"Error parsing listing details from {url}: {e}")
     
-    print(f"Saving data for database insert: {listing_data}")
+    print(f"Extracted data for {url}: {listing_data}")
     return listing_data
+
 
 # --- SCRAPING FUNCTIONS ---
 
@@ -197,13 +226,14 @@ def scrape_zipcode(city, zip_code):
             break
 
     print(f"📊 Total unique listings found in {city} (ZIP {zip_code}): {len(listings)}")
-    print(f"Scraped for {zip_code} complete. Listings are \n {listings}")
+    print(f"Scraped for {zip_code} complete. Listings are \n{listings}")
     return listings
 
 def process_listings_for_zipcode(city, zip_code, listings, conn):
     """Iterates through collected listing URLs to parse details and insert them into the database.
        The zipcode is saved as part of each record."""
     for listing_url in listings:
+        time.sleep(DELAY_BETWEEN_REQUESTS)
         details = parse_listing_details(listing_url)
         if details["listing_id"]:
             listing_record = {
@@ -212,10 +242,12 @@ def process_listings_for_zipcode(city, zip_code, listings, conn):
                 "zipcode": zip_code,  # Saving the zipcode to the database
                 "listing_url": listing_url,
                 "room_type": details.get("room_type"),
-                "bedroom_count": None,  # Adjust if you extract these values
-                "bathroom_count": None  # Adjust if you extract these values
+                "bedroom_count": details.get("bedroom_count"),  # Use parsed value
+                "bathroom_count": details.get("bathroom_count")  # Use parsed value
             }
+            print(f"Inserting listing record: {listing_record}")
             insert_listing(conn, listing_record)
+
 
 def process_city(city, zip_codes, conn):
     """Iterates through ZIP codes for a city and processes each listing."""
@@ -236,8 +268,8 @@ def load_data_from_file(file_path):
 # --- MAIN EXECUTION ---
 
 if __name__ == "__main__":
-    # Create an in-memory SQLite connection for testing
-    conn = sqlite3.connect(":memory:")
+    # Establish a PostgreSQL connection for Supabase
+    conn = get_db_connection()
     create_table(conn)
 
     # Load cities and ZIP codes from file.
