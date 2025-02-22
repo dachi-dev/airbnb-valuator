@@ -64,9 +64,18 @@ def generate_random_search_params():
     possible_price_max = [250, 300, 400, 500, 750, 1000]
     price_max = random.choice([p for p in possible_price_max if p > price_min])
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), guests, price_min, price_max
-def randomize_sleep(min_time=1, max_time=3):
-    """Sleep for a random duration between min_time and max_time seconds."""
-    time.sleep(random.uniform(min_time, max_time))
+def randomize_sleep(base_min=1, base_max=3, extended_min=180, extended_max=300, extended_prob=0.1):
+    """
+    Sleep for a random duration between base_min and base_max seconds.
+    Occasionally, sleep for an extended period between extended_min and extended_max seconds
+    based on the probability extended_prob.
+    """
+    if random.random() < extended_prob:
+        sleep_time = random.uniform(extended_min, extended_max)
+        print(f"⏳ Taking an extended break for {sleep_time:.2f} seconds...")
+    else:
+        sleep_time = random.uniform(base_min, base_max)
+    time.sleep(sleep_time)
 
 # --- DATABASE FUNCTIONS ---
 
