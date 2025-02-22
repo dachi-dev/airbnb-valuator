@@ -15,8 +15,6 @@ from dotenv import load_dotenv
 
 # Configuration
 load_dotenv()
-NUM_PAGES_TO_SCRAPE = 1  # Number of pages per ZIP code
-DELAY_BETWEEN_REQUESTS = 1  # Time delay to avoid detection
 CITY_ZIP_FILE = "cities_and_zipcodes.json"  # File containing city names & ZIP codes
 
 # Supabase/PostgreSQL connection parameters (set these via your environment or update defaults)
@@ -66,6 +64,9 @@ def generate_random_search_params():
     possible_price_max = [250, 300, 400, 500, 750, 1000]
     price_max = random.choice([p for p in possible_price_max if p > price_min])
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), guests, price_min, price_max
+def randomize_sleep(min_time=1, max_time=3):
+    """Sleep for a random duration between min_time and max_time seconds."""
+    time.sleep(random.uniform(min_time, max_time))
 
 # --- DATABASE FUNCTIONS ---
 
@@ -198,10 +199,9 @@ def parse_listing_details(url):
 def scrape_zipcode(city, zip_code):
     """Scrapes listing URLs for a given city and ZIP code and returns a set of unique listing URLs."""
     check_in, check_out, guests, price_min, price_max = generate_random_search_params()
-    start_page = random.randint(2, 5)
     listings = set()
-
-    for page in range(start_page, start_page + NUM_PAGES_TO_SCRAPE):
+    page = 1
+    while True:
         search_url = (f"https://www.airbnb.com/s/{zip_code}/homes?"
                       f"check_in={check_in}&check_out={check_out}&adults={guests}"
                       f"&price_min={price_min}&price_max={price_max}"
@@ -217,10 +217,11 @@ def scrape_zipcode(city, zip_code):
             )
             current_url = driver.current_url
             next_button.click()
-            time.sleep(DELAY_BETWEEN_REQUESTS)
+            randomize_sleep()
             WebDriverWait(driver, 10).until(lambda d: d.current_url != current_url)
             print(f"✅ Moved to next page: {driver.current_url}")
             waitForFullListingsLoad()
+            page += 1
         except Exception as e:
             print(f"❌ No more pages available for {city} (ZIP {zip_code}): {e}")
             break
@@ -233,7 +234,7 @@ def process_listings_for_zipcode(city, zip_code, listings, conn):
     """Iterates through collected listing URLs to parse details and insert them into the database.
        The zipcode is saved as part of each record."""
     for listing_url in listings:
-        time.sleep(DELAY_BETWEEN_REQUESTS)
+        randomize_sleep()
         details = parse_listing_details(listing_url)
         if details["listing_id"]:
             listing_record = {
