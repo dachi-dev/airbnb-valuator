@@ -114,22 +114,22 @@ def get_db_connection():
     )
     return conn
 
-def create_table(conn):
-    """Create the listings table if it doesn't exist."""
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS listings (
-            listing_id TEXT PRIMARY KEY,
-            city TEXT NOT NULL,
-            zipcode TEXT NOT NULL,
-            listing_url TEXT NOT NULL,
-            room_type TEXT,
-            bedroom_count INTEGER,
-            bathroom_count INTEGER
-        );
-    """)
-    conn.commit()
-    cur.close()
+# def create_table(conn):
+#     """Create the listings table if it doesn't exist."""
+#     cur = conn.cursor()
+#     cur.execute("""
+#         CREATE TABLE IF NOT EXISTS listings (
+#             listing_id TEXT PRIMARY KEY,
+#             city TEXT NOT NULL,
+#             zipcode TEXT NOT NULL,
+#             listing_url TEXT NOT NULL,
+#             room_type TEXT,
+#             bedroom_count INTEGER,
+#             bathroom_count INTEGER
+#         );
+#     """)
+#     conn.commit()
+#     cur.close()
 
 def insert_listing(conn, listing_data):
     """
@@ -318,7 +318,7 @@ if __name__ == "__main__":
 
     # Establish a PostgreSQL connection for Supabase
     conn = get_db_connection()
-    create_table(conn)
+    #create_table(conn)
 
     # Load cities and ZIP codes from file.
     city_data = load_data_from_file(CITY_ZIP_FILE)
