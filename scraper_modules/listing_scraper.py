@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import threading
 import random
 from datetime import datetime, timedelta
 from selenium import webdriver
@@ -35,6 +36,26 @@ def setup_driver(headless=True):
     return webdriver.Firefox(options=options)
 
 driver = setup_driver(headless=False)
+
+global paused
+paused = False
+
+def pause_resume_listener():
+    global paused
+    while True:
+        command = input("Type 'pause' to pause, 'resume' to continue: ")
+        if command.lower() == "pause":
+            paused = True
+            print("⏸️ Paused scraping...")
+        elif command.lower() == "resume":
+            paused = False
+            print("▶️ Resuming scraping...")
+
+def wait_for_resume():
+    global paused
+    while paused:
+        time.sleep(1)
+
 def waitForFullListingsLoad(max_wait=5):
     """Waits until there are more than 2 listings loaded, or until max_wait seconds have passed."""
     elapsed = 0
@@ -64,7 +85,7 @@ def generate_random_search_params():
     possible_price_max = [250, 300, 400, 500, 750, 1000]
     price_max = random.choice([p for p in possible_price_max if p > price_min])
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), guests, price_min, price_max
-def randomize_sleep(base_min=1, base_max=3, extended_min=180, extended_max=300, extended_prob=0.1):
+def randomize_sleep(base_min=1, base_max=3, extended_min=180, extended_max=300, extended_prob=0.01):
     """
     Sleep for a random duration between base_min and base_max seconds.
     Occasionally, sleep for an extended period between extended_min and extended_max seconds
@@ -211,6 +232,7 @@ def scrape_zipcode(city, zip_code):
     listings = set()
     page = 1
     while True:
+        wait_for_resume()
         search_url = (f"https://www.airbnb.com/s/{zip_code}/homes?"
                       f"check_in={check_in}&check_out={check_out}&adults={guests}"
                       f"&price_min={price_min}&price_max={price_max}"
@@ -243,6 +265,7 @@ def process_listings_for_zipcode(city, zip_code, listings, conn):
     """Iterates through collected listing URLs to parse details and insert them into the database.
        The zipcode is saved as part of each record."""
     for listing_url in listings:
+        wait_for_resume()
         randomize_sleep()
         details = parse_listing_details(listing_url)
         if details["listing_id"]:
@@ -278,6 +301,11 @@ def load_data_from_file(file_path):
 # --- MAIN EXECUTION ---
 
 if __name__ == "__main__":
+
+    # Start the pause/resume listener in a separate thread
+    listener_thread = threading.Thread(target=pause_resume_listener, daemon=True)
+    listener_thread.start()
+
     # Establish a PostgreSQL connection for Supabase
     conn = get_db_connection()
     create_table(conn)
