@@ -44,17 +44,23 @@ def create_table(conn):
 
 def insert_listing(conn, listing_data):
     """
-    Insert a listing into the database.
+    Insert a listing into the database or update it if it already exists.
     listing_data should be a dictionary containing:
     - listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count
-    Uses PostgreSQL's ON CONFLICT DO NOTHING to avoid duplicate entries.
+    Uses PostgreSQL's ON CONFLICT DO UPDATE to update existing entries.
     """
     cur = conn.cursor()
     try:
         cur.execute("""
             INSERT INTO listings (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count)
             VALUES (%(listing_id)s, %(city)s, %(zipcode)s, %(listing_url)s, %(room_type)s, %(bedroom_count)s, %(bathroom_count)s)
-            ON CONFLICT (listing_id) DO NOTHING;
+            ON CONFLICT (listing_id) DO UPDATE
+            SET city = EXCLUDED.city,
+                zipcode = EXCLUDED.zipcode,
+                listing_url = EXCLUDED.listing_url,
+                room_type = EXCLUDED.room_type,
+                bedroom_count = EXCLUDED.bedroom_count,
+                bathroom_count = EXCLUDED.bathroom_count;
         """, listing_data)
         conn.commit()
     except Exception as e:
