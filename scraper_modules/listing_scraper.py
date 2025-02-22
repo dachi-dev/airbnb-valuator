@@ -96,6 +96,7 @@ def randomize_sleep(base_min=1, base_max=3, extended_min=180, extended_max=300, 
         print(f"⏳ Taking an extended break for {sleep_time:.2f} seconds...")
     else:
         sleep_time = random.uniform(base_min, base_max)
+        print(f"⏳ Sleeping for {sleep_time:.2f} seconds...")
     time.sleep(sleep_time)
 
 # --- DATABASE FUNCTIONS ---
