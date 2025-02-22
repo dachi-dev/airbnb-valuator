@@ -223,7 +223,17 @@ def parse_listing_details(url):
     print(f"Extracted data for {url}: {listing_data}")
     return listing_data
 
-
+def get_current_page():
+    """Extracts the current page number from the pagination elements on the Airbnb search page."""
+    try:
+        current_page_element = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.XPATH, "//button[@aria-current='page']"))
+        )
+        return int(current_page_element.text.strip())
+    except Exception as e:
+        print(f"⚠️ Could not determine the current page: {e}")
+        return 1
+    
 # --- SCRAPING FUNCTIONS ---
 
 def scrape_zipcode(city, zip_code):
@@ -231,28 +241,27 @@ def scrape_zipcode(city, zip_code):
     check_in, check_out, guests, price_min, price_max = generate_random_search_params()
     listings = set()
     page = 1
-    while True:
+    search_url = (f"https://www.airbnb.com/s/{zip_code}/homes?"
+                f"check_in={check_in}&check_out={check_out}&adults={guests}"
+                f"&price_min={price_min}&price_max={price_max}"
+                f"&room_types[]=Entire%20home%2Fapt&page={page}")
+    driver.get(search_url)
+    waitForFullListingsLoad()
+
+    while page <= 15:
         wait_for_resume()
-        search_url = (f"https://www.airbnb.com/s/{zip_code}/homes?"
-                      f"check_in={check_in}&check_out={check_out}&adults={guests}"
-                      f"&price_min={price_min}&price_max={price_max}"
-                      f"&room_types[]=Entire%20home%2Fapt&page={page}")
-        print(f"\n🔍 Scraping {city} (ZIP: {zip_code}), Page {page} -> {search_url}")
-        driver.get(search_url)
-        waitForFullListingsLoad()
+        print(f"\n🔍 Scraping {city} (ZIP: {zip_code}), Page {page}")
         new_listings = get_listings_from_page()
         listings.update(new_listings)
         try:
             next_button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, "//a[@aria-label='Next']"))
             )
-            current_url = driver.current_url
             next_button.click()
             randomize_sleep()
-            WebDriverWait(driver, 10).until(lambda d: d.current_url != current_url)
-            print(f"✅ Moved to next page: {driver.current_url}")
             waitForFullListingsLoad()
-            page += 1
+            print(f"✅ Moved to next page: {driver.current_url}")
+            page = get_current_page()
         except Exception as e:
             print(f"❌ No more pages available for {city} (ZIP {zip_code}): {e}")
             break
