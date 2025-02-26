@@ -15,3 +15,5 @@ SUPABASE_DB_USER=
 
 SUPABASE_DB_PASSWORD=
 
+### known bugs
+The price extraction logic is bugged and will sometimes return null. This is because check-in and check-out date must be inputted in order for the price to appear. Currently, that is randomized and can sometimes be incompatible with the listing resulting in no price appearing to scrape.
