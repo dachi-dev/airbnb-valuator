@@ -15,8 +15,8 @@ Endpoints covered:
 """
 
 import requests
-
-API_KEY = "f14c1040-f2c7-11ef-8d4e-c5d7c7671d88"
+# if ur going to use this class then ingest from .env file
+API_KEY = ""
 BASE_URL = "https://app.zipcodebase.com/api/v1/"
 
 def lookup_zip_codes(codes, country="US"):
