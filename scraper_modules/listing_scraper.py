@@ -14,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database_modules.database import insert_listing, get_db_connection
+from urllib.parse import urlencode
 
 # Configuration
 CITY_ZIP_FILE = os.path.join(os.path.dirname(__file__), "cities_and_zipcodes.json")
@@ -109,6 +110,7 @@ def parse_listing_details(url):
       - room_type: e.g. "Studio" if indicated.
       - bedroom_count: number of bedrooms.
       - bathroom_count: number of bathrooms.
+      - price: the price per night.
       
     It parses the summary section from the <ol> element with a class containing 'lgx66tx'.
     Expected summary format example: "4 guests · 1 bedroom · 2 beds · 1.5 baths"
@@ -119,10 +121,18 @@ def parse_listing_details(url):
         "room_type": None,
         "bedroom_count": None,
         "bathroom_count": None,
+        "price": None
     }
-    
+    check_in, check_out, guests, price_min, price_max = generate_random_search_params()
+    query_params = {
+        "check_in": check_in,
+        "check_out": check_out,
+        "adults": guests
+    }
+    url_with_params = f"{url}?{urlencode(query_params)}"
+
     try:
-        driver.get(url)  
+        driver.get(url_with_params)  
               
         # Extract the listing ID from the URL.
         m = re.search(r"/rooms/(\d+)", url)
@@ -157,14 +167,23 @@ def parse_listing_details(url):
         except Exception as e:
             print(f"Warning: Could not extract summary details from {url}: {e}")
         
-        # # Extract the price per night.
-        # try:
-        #     price_element = WebDriverWait(driver, 10).until(
-        #         EC.presence_of_element_located((By.XPATH, "//*[contains(@aria-label, 'per night')]"))
-        #     )
-        #     listing_data["price"] = price_element.text.strip()
-        # except Exception as e:
-        #     print(f"Warning: Could not extract price from {url}: {e}")
+        # Extract the price per night.
+        try:
+            # Locate the element that contains the breakdown text, e.g., "$545 x 10 nights"
+            breakdown_element = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'nights')]"))
+            )
+            breakdown_text = breakdown_element.text.strip()  # Expected: "$545 x 10 nights"
+            
+            # Extract the nightly price directly from the breakdown text.
+            nightly_price_match = re.search(r'\$(\d+(?:,\d+)*)\s*x', breakdown_text)
+            if nightly_price_match:
+                nightly_price = float(nightly_price_match.group(1).replace(',', ''))
+                listing_data["price"] = nightly_price
+            else:
+                listing_data["price"] = None
+        except Exception as e:
+            print(f"Warning: Could not extract price from {url}: {e}")
             
     except Exception as e:
         print(f"Error parsing listing details from {url}: {e}")
@@ -197,7 +216,7 @@ def scrape_zipcode(city, zip_code):
     driver.get(search_url)
     waitForFullListingsLoad()
 
-    while page <= 15:
+    while page <= 1:
         wait_for_resume()
         print(f"\n🔍 Scraping {city} (ZIP: {zip_code}), Page {page}")
         new_listings = get_listings_from_page()
@@ -209,7 +228,6 @@ def scrape_zipcode(city, zip_code):
             next_button.click()
             randomize_sleep()
             waitForFullListingsLoad()
-            print(f"✅ Moved to next page: {driver.current_url}")
             page = get_current_page()
         except Exception as e:
             print(f"❌ No more pages available for {city} (ZIP {zip_code}): {e}")
@@ -230,11 +248,12 @@ def process_listings_for_zipcode(city, zip_code, listings, conn):
             listing_record = {
                 "listing_id": details["listing_id"],
                 "city": city,
-                "zipcode": zip_code,  # Saving the zipcode to the database
+                "zipcode": zip_code, 
                 "listing_url": listing_url,
                 "room_type": details.get("room_type"),
-                "bedroom_count": details.get("bedroom_count"),  # Use parsed value
-                "bathroom_count": details.get("bathroom_count")  # Use parsed value
+                "bedroom_count": details.get("bedroom_count"), 
+                "bathroom_count": details.get("bathroom_count"),
+                "price": details.get("price")
             }
             print(f"Inserting listing record: {listing_record}")
             insert_listing(conn, listing_record)

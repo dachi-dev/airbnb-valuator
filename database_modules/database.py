@@ -35,8 +35,10 @@ def create_table(conn):
             zipcode TEXT NOT NULL,
             listing_url TEXT NOT NULL,
             room_type TEXT,
-            bedroom_count INTEGER,
-            bathroom_count INTEGER
+            bedroom_count INTEGER NOT NULL,
+            bathroom_count INTEGER NOT NULL,
+            price NUMERIC NOT NULL,
+            timestamp TIMESTAMP DEFAULT NOW()
         );
     """)
     conn.commit()
@@ -52,15 +54,16 @@ def insert_listing(conn, listing_data):
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT INTO listings (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count)
-            VALUES (%(listing_id)s, %(city)s, %(zipcode)s, %(listing_url)s, %(room_type)s, %(bedroom_count)s, %(bathroom_count)s)
+            INSERT INTO listings (listing_id, city, zipcode, listing_url, room_type, bedroom_count, bathroom_count, price)
+            VALUES (%(listing_id)s, %(city)s, %(zipcode)s, %(listing_url)s, %(room_type)s, %(bedroom_count)s, %(bathroom_count)s, %(price)s)
             ON CONFLICT (listing_id) DO UPDATE
             SET city = EXCLUDED.city,
                 zipcode = EXCLUDED.zipcode,
                 listing_url = EXCLUDED.listing_url,
                 room_type = EXCLUDED.room_type,
                 bedroom_count = EXCLUDED.bedroom_count,
-                bathroom_count = EXCLUDED.bathroom_count;
+                bathroom_count = EXCLUDED.bathroom_count,
+                price = EXCLUDED.price;
         """, listing_data)
         conn.commit()
     except Exception as e:
